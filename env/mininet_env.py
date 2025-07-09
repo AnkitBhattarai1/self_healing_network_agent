@@ -1,4 +1,6 @@
 import numpy as np
+from mininet.net import Mininet
+from mininet.node import Controller, OVSKernelSwitch, RemoteController
 from mininet.log import setLogLevel
 import time
 import subprocess
@@ -7,7 +9,7 @@ class MininetNetworkEnvironment:
     def __init__(self):
         setLogLevel('info')
         self.simulator = RealNetworkSimulator()
-        self.net = None
+        self.net = Mininet(controller=lambda name: RemoteController(name, ip='127.0.0.1', port=6633))
         self.action_space = 8  # Increased action space for real network operations
         self.state_space = 80  # Fixed state vector size
         self.episode_length = 50
@@ -30,19 +32,22 @@ class MininetNetworkEnvironment:
         """Reset environment for new episode"""
         if self.net:
             self.simulator.stop_network()
-        
-        # Create and start new network
+
         self.net = self.simulator.create_enterprise_topology()
         self.simulator.start_network()
-        
-        # Wait for network to stabilize
-        time.sleep(10)
-        
-        # Measure baseline performance
+
+        time.sleep(5)
+
+        print("[DEBUG] Dumping host interfaces:")
+        for host_name in ['web1', 'db1', 'pc1']:
+            host = self.net.get(host_name)
+            print(f"{host_name}:")
+            print(host.cmd("ifconfig"))
+
         self.baseline_performance = self.simulator.calculate_network_performance()
-        
         self.current_step = 0
         return self.simulator.get_network_state_vector()
+
     
     def step(self, action):
         """Execute one step in the environment"""
@@ -153,7 +158,7 @@ class MininetNetworkEnvironment:
         try:
             for switch in self.simulator.switches:
                 # Clear existing flows
-                subprocess.run(f"sudo ovs-ofctl del-flows {switch.name}", shell=True)
+                subprocess.run(f"sudo ovs-ofctl -O OpenFlow13  del-flows {switch.name}", shell=True)
                 # Let controller reinstall basic flows
                 time.sleep(2)
             return 8

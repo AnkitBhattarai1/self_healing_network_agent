@@ -10,93 +10,103 @@ import psutil
 import numpy as np
 class RealNetworkSimulator:
     def __init__(self):
+        TCLink.r2q = 0.01
         self.net = Mininet(controller=lambda name: RemoteController(name, ip='127.0.0.1', port=6633))
         self.topology_type = 'tree'
         self.hosts = []
         self.switches = []
+        self.router=None
         self.links = []
         self.network_stats = defaultdict(dict)
         self.monitoring_active = False
 
     def create_enterprise_topology(self):
-        """Create a realistic enterprise network topology"""
         info('*** Creating enterprise network topology\n')
 
-        self.net = Mininet(
-            controller=lambda name: RemoteController(name, ip='127.0.0.1', port=6633),
-            switch=OVSKernelSwitch,
-            link=TCLink,
-            autoSetMacs=True,
-            autoStaticArp=True
-        )
+        # Removed: self.net = Mininet(...) — already initialized in __init__()
 
-        # Add controller
-        c0 = self.net.addController('c0')
+        self.net.addController('c0')
 
-        # Core switches (backbone)
-        core1 = self.net.addSwitch('s1', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        core2 = self.net.addSwitch('s2', cls=OVSKernelSwitch, protocols='OpenFlow13')
+        # Add router host with multiple interfaces
+        self.router = self.net.addHost('r1', ip='10.0.1.1/24')
 
-        # Distribution layer switches
-        dist1 = self.net.addSwitch('s3', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        dist2 = self.net.addSwitch('s4', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        dist3 = self.net.addSwitch('s5', cls=OVSKernelSwitch, protocols='OpenFlow13')
+        # Add switches
+        s = {}
+        for i in range(1, 10):
+            s[i] = self.net.addSwitch(f's{i}', cls=OVSKernelSwitch, protocols='OpenFlow13')
 
-        # Access layer switches
-        access1 = self.net.addSwitch('s6', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        access2 = self.net.addSwitch('s7', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        access3 = self.net.addSwitch('s8', cls=OVSKernelSwitch, protocols='OpenFlow13')
-        access4 = self.net.addSwitch('s9', cls=OVSKernelSwitch, protocols='OpenFlow13')
-
-        self.switches = [core1, core2, dist1, dist2, dist3, access1, access2, access3, access4]
+        self.switches = list(s.values())
 
         # Add hosts
         web1 = self.net.addHost('web1', ip='10.0.1.10/24')
         web2 = self.net.addHost('web2', ip='10.0.1.11/24')
-
         db1 = self.net.addHost('db1', ip='10.0.2.10/24')
         db2 = self.net.addHost('db2', ip='10.0.2.11/24')
-
         pc1 = self.net.addHost('pc1', ip='10.0.3.10/24')
         pc2 = self.net.addHost('pc2', ip='10.0.3.11/24')
         pc3 = self.net.addHost('pc3', ip='10.0.3.12/24')
         pc4 = self.net.addHost('pc4', ip='10.0.3.13/24')
-
         monitor = self.net.addHost('monitor', ip='10.0.4.10/24')
 
         self.hosts = [web1, web2, db1, db2, pc1, pc2, pc3, pc4, monitor]
 
-        # Create links with bandwidth and latency
-        self.net.addLink(core1, core2, bw=1000, delay='1ms', loss=0.1)
+        # Connect router to switches with named interfaces
+        self.net.addLink(self.router, s[6], intfName1='r1-eth0')
+        self.net.addLink(self.router, s[7], intfName1='r1-eth1')
+        self.net.addLink(self.router, s[8], intfName1='r1-eth2')
+        self.net.addLink(self.router, s[9], intfName1='r1-eth3')
 
-        self.net.addLink(core1, dist1, bw=1000, delay='2ms', loss=0.1)
-        self.net.addLink(core1, dist2, bw=1000, delay='2ms', loss=0.1)
-        self.net.addLink(core2, dist2, bw=1000, delay='2ms', loss=0.1)
-        self.net.addLink(core2, dist3, bw=1000, delay='2ms', loss=0.1)
+        # Inter-switch links
+        self.net.addLink(s[1], s[2], bw=1000, delay='1ms')
+        self.net.addLink(s[1], s[3], bw=1000, delay='2ms')
+        self.net.addLink(s[1], s[4], bw=1000, delay='2ms')
+        self.net.addLink(s[2], s[4], bw=1000, delay='2ms')
+        self.net.addLink(s[2], s[5], bw=1000, delay='2ms')
+        self.net.addLink(s[3], s[6], bw=100, delay='5ms')
+        self.net.addLink(s[3], s[7], bw=100, delay='5ms')
+        self.net.addLink(s[4], s[7], bw=100, delay='5ms')
+        self.net.addLink(s[4], s[8], bw=100, delay='5ms')
+        self.net.addLink(s[5], s[8], bw=100, delay='5ms')
+        self.net.addLink(s[5], s[9], bw=100, delay='5ms')
 
-        self.net.addLink(dist1, access1, bw=100, delay='5ms', loss=0.2)
-        self.net.addLink(dist1, access2, bw=100, delay='5ms', loss=0.2)
-        self.net.addLink(dist2, access2, bw=100, delay='5ms', loss=0.2)
-        self.net.addLink(dist2, access3, bw=100, delay='5ms', loss=0.2)
-        self.net.addLink(dist3, access3, bw=100, delay='5ms', loss=0.2)
-        self.net.addLink(dist3, access4, bw=100, delay='5ms', loss=0.2)
-
-        self.net.addLink(web1, access1, bw=100, delay='1ms')
-        self.net.addLink(web2, access1, bw=100, delay='1ms')
-        self.net.addLink(db1, access2, bw=100, delay='1ms')
-        self.net.addLink(db2, access2, bw=100, delay='1ms')
-        self.net.addLink(pc1, access3, bw=10, delay='1ms')
-        self.net.addLink(pc2, access3, bw=10, delay='1ms')
-        self.net.addLink(pc3, access4, bw=10, delay='1ms')
-        self.net.addLink(pc4, access4, bw=10, delay='1ms')
-        self.net.addLink(monitor, access1, bw=100, delay='1ms')
+        # Host links
+        self.net.addLink(web1, s[6])
+        self.net.addLink(web2, s[6])
+        self.net.addLink(db1, s[7])
+        self.net.addLink(db2, s[7])
+        self.net.addLink(pc1, s[8])
+        self.net.addLink(pc2, s[8])
+        self.net.addLink(pc3, s[9])
+        self.net.addLink(pc4, s[9])
+        self.net.addLink(monitor, s[6])
 
         return self.net
+
+    def configure_router(self):
+        r1 = self.router
+        r1.cmd('sysctl -w net.ipv4.ip_forward=1')
+        interfaces = ['r1-eth0', 'r1-eth1', 'r1-eth2', 'r1-eth3']
+        ips = ['10.0.1.1/24', '10.0.2.1/24', '10.0.3.1/24', '10.0.4.1/24']
+        for iface, ip in zip(interfaces, ips):
+            r1.setIP(ip, intf=iface)
+
+        # Set host default routes
+        for host in self.hosts:
+            ip = host.IP()
+            if ip.startswith("10.0.1."):
+                host.cmd('ip route add default via 10.0.1.1')
+            elif ip.startswith("10.0.2."):
+                host.cmd('ip route add default via 10.0.2.1')
+            elif ip.startswith("10.0.3."):
+                host.cmd('ip route add default via 10.0.3.1')
+            elif ip.startswith("10.0.4."):
+                host.cmd('ip route add default via 10.0.4.1')
+
 
     def start_network(self):
         info('*** Starting network\n')
         self.net.start()
-
+        self.configure_router()
         for host in self.hosts:
             host.cmd('sysctl net.ipv4.ip_forward=1')
 
@@ -288,41 +298,61 @@ class RealNetworkSimulator:
             db1 = self.net.get('db1')
             pc1 = self.net.get('pc1')
 
+            print("[DEBUG] Hosts found")
+
             connectivity_score = 0
             latency_score = 0
-
-            result = web1.cmd('ping -c 3 10.0.2.10')
-            if '0% packet loss' in result:
-                connectivity_score += 25
-                if 'avg' in result:
-                    avg_latency = float(result.split('avg')[1].split('/')[0])
-                    latency_score += max(0, 50 - avg_latency)
-
-            result = pc1.cmd('ping -c 3 10.0.1.10')
-            if '0% packet loss' in result:
-                connectivity_score += 25
-                if 'avg' in result:
-                    avg_latency = float(result.split('avg')[1].split('/')[0])
-                    latency_score += max(0, 50 - avg_latency)
-
             bandwidth_score = 0
+
+            # Ping pc1 → web1
+            result = pc1.cmd('ping -c 3 10.0.2.10')
+            print("[DEBUG] Ping web1:\n", result)
+            if '0% packet loss' in result:
+                connectivity_score += 25
+            if "rtt min/avg/max/mdev" in result:
+                last_line = result.strip().split("\n")[-1]
+                avg_latency = float(last_line.split('=')[1].split('/')[1])
+                latency_score += max(0, 50 - avg_latency)
+
+            # Ping pc1 → db1
+            result = pc1.cmd('ping -c 3 10.0.2.11')
+            print("[DEBUG] Ping db1:\n", result)
+            if '0% packet loss' in result:
+                connectivity_score += 25
+            if "rtt min/avg/max/mdev" in result:
+                last_line = result.strip().split("\n")[-1]
+                avg_latency = float(last_line.split('=')[1].split('/')[1])
+                latency_score += max(0, 50 - avg_latency)
+
+            # Bandwidth test
             try:
                 web1.cmd('iperf3 -s -D')
+                print("[DEBUG] Started iperf3 server on web1")
                 time.sleep(1)
-                result = pc1.cmd('iperf3 -c 10.0.1.10 -t 5 -f M')
+                result = pc1.cmd('iperf3 -c 10.0.2.10 -t 5 -f M')
+                print("[DEBUG] iperf3 result:\n", result)
                 if 'Mbits/sec' in result:
-                    bandwidth = float(result.split('Mbits/sec')[0].split()[-1])
-                    bandwidth_score = min(50, bandwidth)
+                    for line in result.split('\n'):
+                        if 'receiver' in line or 'sender' in line:
+                            parts = line.split()
+                            if len(parts) >= 7:
+                                bandwidth = float(parts[-2])
+                                bandwidth_score = min(50, bandwidth)
+                                break
                 web1.cmd('pkill iperf3')
             except Exception as e:
-                print(f"Bandwidth test error: {e}")
+                print(f"[ERROR] Bandwidth test error: {e}")
 
             total_score = connectivity_score + latency_score + bandwidth_score
+            print(f"[DEBUG] Scores => Connectivity: {connectivity_score}, Latency: {latency_score}, Bandwidth: {bandwidth_score}, Total: {total_score}")
+
             return min(100, total_score)
 
         except Exception as e:
-            print(f"Performance calculation error: {e}")
+            print(f"[ERROR] Performance calculation failed: {e}")
             return 0
+
+
 
     def stop_network(self):
         self.monitoring_active = False
